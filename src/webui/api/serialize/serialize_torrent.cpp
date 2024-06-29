@@ -54,7 +54,7 @@ namespace
         case BitTorrent::TorrentState::StoppedUploading:
             return u"stoppedUP"_s;
         case BitTorrent::TorrentState::QueuedUploading:
-            return u"stoppedUP"_s;
+            return u"queuedUP"_s;
         case BitTorrent::TorrentState::StalledUploading:
             return u"stalledUP"_s;
         case BitTorrent::TorrentState::CheckingUploading:
@@ -163,7 +163,7 @@ QVariantMap serialize(const BitTorrent::Torrent &torrent)
         {KEY_TORRENT_AVAILABILITY, torrent.distributedCopies()},
         {KEY_TORRENT_REANNOUNCE, torrent.nextAnnounce()},
         {KEY_TORRENT_COMMENT, torrent.comment()},
-
+        {KEY_TORRENT_PRIVATE, torrent.isPrivate()},
         {KEY_TORRENT_TOTAL_SIZE, torrent.totalSize()}
     };
 }

@@ -52,19 +52,21 @@ const TorrentFilter TorrentFilter::ErroredTorrent(TorrentFilter::Errored);
 using BitTorrent::Torrent;
 
 TorrentFilter::TorrentFilter(const Type type, const std::optional<TorrentIDSet> &idSet
-        , const std::optional<QString> &category, const std::optional<Tag> &tag)
+        , const std::optional<QString> &category, const std::optional<Tag> &tag, const std::optional<bool> isPrivate)
     : m_type {type}
     , m_category {category}
     , m_tag {tag}
     , m_idSet {idSet}
+    , m_private {isPrivate}
 {
 }
 
 TorrentFilter::TorrentFilter(const QString &filter, const std::optional<TorrentIDSet> &idSet
-        , const std::optional<QString> &category, const std::optional<Tag> &tag)
+        , const std::optional<QString> &category, const std::optional<Tag> &tag, const std::optional<bool> isPrivate)
     : m_category {category}
     , m_tag {tag}
     , m_idSet {idSet}
+    , m_private {isPrivate}
 {
     setTypeByName(filter);
 }
@@ -147,19 +149,31 @@ bool TorrentFilter::setTag(const std::optional<Tag> &tag)
     return false;
 }
 
+bool TorrentFilter::setPrivate(const std::optional<bool> isPrivate)
+{
+    if (m_private != isPrivate)
+    {
+        m_private = isPrivate;
+        return true;
+    }
+
+    return false;
+}
+
 bool TorrentFilter::match(const Torrent *const torrent) const
 {
     if (!torrent) return false;
 
-    return (matchState(torrent) && matchHash(torrent) && matchCategory(torrent) && matchTag(torrent));
+    return (matchState(torrent) && matchHash(torrent) && matchCategory(torrent) && matchTag(torrent) && matchPrivate(torrent));
 }
 
 bool TorrentFilter::matchState(const BitTorrent::Torrent *const torrent) const
 {
+    const BitTorrent::TorrentState state = torrent->state();
+
     switch (m_type)
     {
     case All:
-    default:
         return true;
     case Downloading:
         return torrent->isDownloading();
@@ -176,20 +190,23 @@ bool TorrentFilter::matchState(const BitTorrent::Torrent *const torrent) const
     case Inactive:
         return torrent->isInactive();
     case Stalled:
-        return (torrent->state() ==  BitTorrent::TorrentState::StalledUploading)
-                || (torrent->state() ==  BitTorrent::TorrentState::StalledDownloading);
+        return (state == BitTorrent::TorrentState::StalledUploading)
+                || (state == BitTorrent::TorrentState::StalledDownloading);
     case StalledUploading:
-        return torrent->state() ==  BitTorrent::TorrentState::StalledUploading;
+        return state == BitTorrent::TorrentState::StalledUploading;
     case StalledDownloading:
-        return torrent->state() ==  BitTorrent::TorrentState::StalledDownloading;
+        return state == BitTorrent::TorrentState::StalledDownloading;
     case Checking:
-        return (torrent->state() == BitTorrent::TorrentState::CheckingUploading)
-                || (torrent->state() == BitTorrent::TorrentState::CheckingDownloading)
-                || (torrent->state() == BitTorrent::TorrentState::CheckingResumeData);
+        return (state == BitTorrent::TorrentState::CheckingUploading)
+                || (state == BitTorrent::TorrentState::CheckingDownloading)
+                || (state == BitTorrent::TorrentState::CheckingResumeData);
     case Moving:
         return torrent->isMoving();
     case Errored:
         return torrent->isErrored();
+    default:
+        Q_ASSERT(false);
+        return false;
     }
 }
 
@@ -219,4 +236,12 @@ bool TorrentFilter::matchTag(const BitTorrent::Torrent *const torrent) const
         return torrent->tags().isEmpty();
 
     return torrent->hasTag(*m_tag);
+}
+
+bool TorrentFilter::matchPrivate(const BitTorrent::Torrent *const torrent) const
+{
+    if (!m_private)
+        return true;
+
+    return m_private == torrent->isPrivate();
 }

@@ -77,6 +77,10 @@
 #include "base/utils/os.h"
 #endif // Q_OS_MACOS || Q_OS_WIN
 
+#ifndef QBT_USES_LIBTORRENT2
+#include "customstorage.h"
+#endif
+
 using namespace BitTorrent;
 
 namespace
@@ -982,6 +986,21 @@ PathList TorrentImpl::filePaths() const
     return m_filePaths;
 }
 
+PathList TorrentImpl::actualFilePaths() const
+{
+    if (!hasMetadata())
+        return {};
+
+    PathList paths;
+    paths.reserve(filesCount());
+
+    const lt::file_storage files = nativeTorrentInfo()->files();
+    for (const lt::file_index_t &nativeIndex : asConst(m_torrentInfo.nativeIndexes()))
+        paths.emplaceBack(files.file_path(nativeIndex));
+
+    return paths;
+}
+
 QVector<DownloadPriority> TorrentImpl::filePriorities() const
 {
     return m_filePriorities;
@@ -999,6 +1018,9 @@ bool TorrentImpl::isStopped() const
 
 bool TorrentImpl::isQueued() const
 {
+    if (!m_session->isQueueingSystemEnabled())
+        return false;
+
     // Torrent is Queued if it isn't in Stopped state but paused internally
     return (!isStopped()
             && (m_nativeStatus.flags & lt::torrent_flags::auto_managed)
@@ -1153,7 +1175,7 @@ void TorrentImpl::updateState()
     {
         if (isStopped())
             m_state = TorrentState::StoppedDownloading;
-        else if (m_session->isQueueingSystemEnabled() && isQueued())
+        else if (isQueued())
             m_state = TorrentState::QueuedDownloading;
         else
             m_state = isForced() ? TorrentState::ForcedDownloadingMetadata : TorrentState::DownloadingMetadata;
@@ -1167,7 +1189,7 @@ void TorrentImpl::updateState()
     {
         if (isStopped())
             m_state = TorrentState::StoppedUploading;
-        else if (m_session->isQueueingSystemEnabled() && isQueued())
+        else if (isQueued())
             m_state = TorrentState::QueuedUploading;
         else if (isForced())
             m_state = TorrentState::ForcedUploading;
@@ -1180,7 +1202,7 @@ void TorrentImpl::updateState()
     {
         if (isStopped())
             m_state = TorrentState::StoppedDownloading;
-        else if (m_session->isQueueingSystemEnabled() && isQueued())
+        else if (isQueued())
             m_state = TorrentState::QueuedDownloading;
         else if (isForced())
             m_state = TorrentState::ForcedDownloading;
@@ -1608,7 +1630,17 @@ void TorrentImpl::forceRecheck()
     // an incorrect one during the interval until the cached state is updated in a regular way.
     m_nativeStatus.state = lt::torrent_status::checking_resume_data;
 
-    m_hasMissingFiles = false;
+    if (m_hasMissingFiles)
+    {
+        m_hasMissingFiles = false;
+        if (!isStopped())
+        {
+            setAutoManaged(m_operatingMode == TorrentOperatingMode::AutoManaged);
+            if (m_operatingMode == TorrentOperatingMode::Forced)
+                m_nativeHandle.resume();
+        }
+    }
+
     m_unchecked = false;
 
     m_completedFiles.fill(false);
@@ -1778,12 +1810,13 @@ void TorrentImpl::endReceivedMetadataHandling(const Path &savePath, const PathLi
         const Path filePath = actualFilePath.removedExtension(QB_EXT);
         m_filePaths.append(filePath);
 
-        lt::download_priority_t &nativePriority = p.file_priorities[LT::toUnderlyingType(nativeIndex)];
-        if ((nativePriority != lt::dont_download) && m_session->isFilenameExcluded(filePath.filename()))
-            nativePriority = lt::dont_download;
-        const auto priority = LT::fromNative(nativePriority);
-        m_filePriorities.append(priority);
+        m_filePriorities.append(LT::fromNative(p.file_priorities[LT::toUnderlyingType(nativeIndex)]));
     }
+
+    m_session->applyFilenameFilter(fileNames, m_filePriorities);
+    for (int i = 0; i < m_filePriorities.size(); ++i)
+        p.file_priorities[LT::toUnderlyingType(nativeIndexes[i])] = LT::toNative(m_filePriorities[i]);
+
     p.save_path = savePath.toString().toStdString();
     p.ti = metadata;
 
@@ -1846,6 +1879,9 @@ void TorrentImpl::reload()
 
         auto *const extensionData = new ExtensionData;
         p.userdata = LTClientData(extensionData);
+#ifndef QBT_USES_LIBTORRENT2
+        p.storage = customStorageConstructor;
+#endif
         m_nativeHandle = m_nativeSession->add_torrent(p);
 
         m_nativeStatus = extensionData->status;
@@ -1951,6 +1987,11 @@ void TorrentImpl::renameFile(const int index, const Path &path)
 void TorrentImpl::handleStateUpdate(const lt::torrent_status &nativeStatus)
 {
     updateStatus(nativeStatus);
+}
+
+void TorrentImpl::handleQueueingModeChanged()
+{
+    updateState();
 }
 
 void TorrentImpl::handleMoveStorageJobFinished(const Path &path, const MoveStorageContext context, const bool hasOutstandingJob)
